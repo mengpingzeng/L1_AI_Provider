@@ -13,9 +13,10 @@ import (
 // ============================================================
 
 type Provider struct {
-	APIKey  string   `json:"api_key"`
-	BaseURL string   `json:"base_url"`
-	Models  []string `json:"-"`
+	APIKey    string   `json:"api_key"`
+	BaseURL   string   `json:"base_url"`
+	MaxTokens int      `json:"max_tokens,omitempty"`
+	Models    []string `json:"-"`
 }
 
 type ModelInfo struct {
@@ -51,20 +52,26 @@ type KeysEntry struct {
 
 type builtinDef struct {
 	Key       string
+	ConfigKey string
 	BaseURL   string
 	EnvVars   []string
+	MaxTokens int
 }
 
 var builtinProviders = []builtinDef{
 	{
-		Key:     "deepseek",
-		BaseURL: "https://api.deepseek.com/v1",
-		EnvVars: []string{"DEEPSEEK_API_KEY", "TEAM_DEEPSEEK_API_KEY"},
+		Key:       "deepseek",
+		ConfigKey: "team-deepseek",
+		BaseURL:   "https://api.deepseek.com/v1",
+		EnvVars:   []string{"DEEPSEEK_API_KEY", "TEAM_DEEPSEEK_API_KEY"},
+		MaxTokens: 8192,
 	},
 	{
-		Key:     "hy3",
-		BaseURL: "https://api.hy3-preview.tencent.com/v1",
-		EnvVars: []string{"HY3_API_KEY", "TEAM_HY3_API_KEY"},
+		Key:       "hy3",
+		ConfigKey: "team-hy3",
+		BaseURL:   "https://api.hy3-preview.tencent.com/v1",
+		EnvVars:   []string{"HY3_API_KEY", "TEAM_HY3_API_KEY"},
+		MaxTokens: 4096,
 	},
 }
 
@@ -101,10 +108,11 @@ func NewManager(keysConfigPath string) (*Manager, error) {
 			ring := NewKeyRing(bp.Key, keys, m.stateFilePath(keysConfigPath))
 			m.rings[bp.Key] = ring
 
-			m.config.Provider[bp.Key] = Provider{
-				APIKey:  ring.Next(),
-				BaseURL: bp.BaseURL,
-				Models:  m.discoverModels(bp.Key),
+			m.config.Provider[bp.ConfigKey] = Provider{
+				APIKey:    ring.Next(),
+				BaseURL:   bp.BaseURL,
+				MaxTokens: bp.MaxTokens,
+				Models:    m.discoverModels(bp.Key),
 			}
 		}
 	}
@@ -214,6 +222,10 @@ func (m *Manager) buildModelCatalog() {
 		}
 		if _, ok := m.config.Provider[bm.Provider]; ok {
 			m.models = append(m.models, bm)
+			continue
+		}
+		if _, ok := m.config.Provider["team-"+bm.Provider]; ok {
+			m.models = append(m.models, bm)
 		}
 	}
 }
@@ -279,10 +291,14 @@ func (m *Manager) EnrichConfig(configPath string) error {
 }
 
 func (m *Manager) rotateKeys() {
-	for key, ring := range m.rings {
-		if prov, ok := m.config.Provider[key]; ok {
+	for _, bp := range builtinProviders {
+		ring, ok := m.rings[bp.Key]
+		if !ok {
+			continue
+		}
+		if prov, ok := m.config.Provider[bp.ConfigKey]; ok {
 			prov.APIKey = ring.Next()
-			m.config.Provider[key] = prov
+			m.config.Provider[bp.ConfigKey] = prov
 		}
 	}
 }
