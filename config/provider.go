@@ -3,9 +3,12 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ============================================================
@@ -309,6 +312,54 @@ func OpenCodeConfigPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".config", "opencode", "opencode.json")
+}
+
+func (m *Manager) SelfCheck() {
+	log.Println("========== L1_AI_Provider Self-Check ==========")
+	for provKey, prov := range m.config.Provider {
+		if prov.APIKey == "" {
+			log.Printf("[SKIP] Provider %s: no API key configured", provKey)
+			continue
+		}
+		keyPrefix := prov.APIKey
+		if len(keyPrefix) > 16 {
+			keyPrefix = keyPrefix[:16]
+		}
+		log.Printf("[CHECK] Provider %s: testing key %s... | base_url=%s", provKey, keyPrefix+"...", prov.BaseURL)
+
+		baseURL := prov.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.deepseek.com/v1"
+		}
+
+		req, err := http.NewRequest("GET", baseURL+"/models", nil)
+		if err != nil {
+			log.Printf("[FAIL] Provider %s: failed to create request: %v", provKey, err)
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+prov.APIKey)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		start := time.Now()
+		resp, err := client.Do(req)
+		duration := time.Since(start)
+
+		if err != nil {
+			log.Printf("[FAIL] Provider %s: API call failed after %s: %v", provKey, duration.Round(time.Millisecond), err)
+			continue
+		}
+		resp.Body.Close()
+
+		status := resp.StatusCode
+		if status == 200 {
+			log.Printf("[OK] Provider %s: key valid (HTTP %d, latency %s)", provKey, status, duration.Round(time.Millisecond))
+		} else if status == 401 || status == 403 {
+			log.Printf("[FAIL] Provider %s: INVALID KEY (HTTP %d) - check config/keys.json", provKey, status)
+		} else {
+			log.Printf("[WARN] Provider %s: unexpected HTTP %d (latency %s)", provKey, status, duration.Round(time.Millisecond))
+		}
+	}
+	log.Println("========== Self-Check Complete ==========")
 }
 
 func (m *Manager) Validate() []string {
